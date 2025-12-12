@@ -1,9 +1,7 @@
 from typing import Optional
 from time import perf_counter
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
 from app.database.connection import get_db
 from app.services.product_service import get_product
 from app.services.pricing_service.calculate_price import calculate_final_price
@@ -42,7 +40,6 @@ def calculate_price(
 
     user_tier_value: Optional[str] = user_tier.value if user_tier else None
 
-    # ---- measure calculation time ----
     start = perf_counter()
     result = calculate_final_price(
         db=db,
@@ -52,7 +49,6 @@ def calculate_price(
     )
     duration_ms = (perf_counter() - start) * 1000.0
 
-    # optional logging if slower than target
     if duration_ms > 30.0:
         print(
             f"[WARN] Price calculation for product {product_id} took "
@@ -62,7 +58,6 @@ def calculate_price(
     flash_qty = result["flash_sale_quantity"]
     dyn_qty = result["dynamic_quantity"]
 
-    # ---------- Human-readable message ----------
     if result["flash_sale_applied"] and dyn_qty > 0:
         message = (
             f"Flash sale applied for available quantity ({flash_qty}). "
@@ -73,7 +68,6 @@ def calculate_price(
     else:
         message = "Dynamic pricing applied. No active flash sale."
 
-    # ---------- Structured breakdown per segment ----------
     pricing_breakdown = []
 
     if flash_qty > 0:
@@ -102,7 +96,6 @@ def calculate_price(
             }
         )
 
-    # ---------- Explicit summary for each part + grand total ----------
     summary = {
         "flash_sale": {
             "quantity": flash_qty,
@@ -119,7 +112,6 @@ def calculate_price(
         },
     }
 
-    # ---------- Final response ----------
     return {
         "message": message,
         "product_id": product.product_id,

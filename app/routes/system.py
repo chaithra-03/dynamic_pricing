@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from datetime import datetime, timedelta
-
 from app.database.connection import get_db
 from app.dependencies.auth import require_admin
 from app.schemas.system import HealthCheckResponse, SystemMetricsResponse
@@ -11,24 +10,16 @@ from app.models.flash_sale import FlashSaleOrder
 
 router = APIRouter(tags=["System"])
 
-
 @router.get("/health", response_model=HealthCheckResponse)
 def health_check(request: Request, db: Session = Depends(get_db)):
-    """
-    Lightweight public health check.
-    Returns ok + DB connectivity check (SELECT 1).
-    """
     now = datetime.utcnow()
     start_time = getattr(request.app.state, "start_time", now)
     uptime_seconds = (now - start_time).total_seconds()
 
-    # DB quick check
     db_ok = True
     extra = {}
     try:
-        # try a tiny query - SELECT 1
         db.execute(select(func.count()).select_from(func.sql.text('(SELECT 1)')))  # favor no table access
-        # above is a safe lightweight attempt - some DBs may not like; fallback to select 1:
     except Exception:
         try:
             db.execute(select(1))
@@ -36,14 +27,12 @@ def health_check(request: Request, db: Session = Depends(get_db)):
             db_ok = False
             extra["db_error"] = str(e)
 
-    # Optionally add presence of migrations table (if you want)
     try:
         q = db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version';"
         ).fetchone()
         extra["alembic_version_table_present"] = bool(q)
     except Exception:
-        # ignore
         pass
 
     status = "ok" if db_ok else "degraded"
@@ -59,14 +48,9 @@ def health_check(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/metrics", response_model=SystemMetricsResponse, dependencies=[Depends(require_admin)])
 def system_metrics(request: Request, db: Session = Depends(get_db)):
-    """
-    Admin-only system metrics in JSON form.
-    Uses in-process counters stored on app.state.metrics and DB-derived metrics.
-    """
     now = datetime.utcnow()
     start_time = getattr(request.app.state, "start_time", now)
     uptime_seconds = (now - start_time).total_seconds()
-
     metrics = getattr(request.app.state, "metrics", None) or {}
     requests_count = int(metrics.get("requests", 0))
     total_response_ms = float(metrics.get("total_response_ms", 0.0))
@@ -78,7 +62,6 @@ def system_metrics(request: Request, db: Session = Depends(get_db)):
         denom = cache_hits + cache_misses
         cache_hit_rate = (cache_hits / denom) * 100.0 if denom > 0 else None
 
-    # DB-derived metrics (simple examples)
     try:
         active_flash_sales = (
             db.query(func.count())
@@ -92,7 +75,6 @@ def system_metrics(request: Request, db: Session = Depends(get_db)):
     try:
         today = now.date()
         start_today = datetime.combine(today, datetime.min.time())
-        # count orders today
         total_orders_today = (
             db.query(func.count())
             .select_from(FlashSaleOrder)

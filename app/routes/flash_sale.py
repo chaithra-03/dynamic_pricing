@@ -1,7 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request,BackgroundTasks
 from sqlalchemy.orm import Session
-
 from app.database.connection import get_db
 from app.schemas.flash_sale import (
     FlashSaleCreate,
@@ -77,7 +76,7 @@ def activate_flash_sale_route(
     return flash_sale
 
 
-# ---------- END FLASH SALE (OPTIONAL) ----------
+# ---------- END FLASH SALE ----------
 
 @router.post("/{flash_sale_id}/end", response_model=FlashSaleResponse, dependencies=[Depends(require_admin)])
 def end_flash_sale_route(
