@@ -1,9 +1,10 @@
+from time import perf_counter
+from threading import Lock
 import uuid
 from datetime import datetime
-from typing import List, Tuple, Optional
-
+from typing import List, Tuple, Optional,Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_,select, update
 from app.models.product import Product
 from app.models.flash_sale import FlashSale, FlashSaleProduct, FlashSaleOrder
 from app.models.product import Product
@@ -17,9 +18,11 @@ from app.schemas.flash_sale import (
     ValidatePurchaseRequest,
     ValidatePurchaseResponse,
 )
-from fastapi import HTTPException
-
+from fastapi import HTTPException, BackgroundTasks
 import uuid
+
+_USER_PURCHASES: Dict[tuple, int] = {}
+_USER_PURCHASES_LOCK = Lock()
 
 def generate_order_id():
     return "ORD_" + uuid.uuid4().hex[:10].upper()
@@ -32,6 +35,26 @@ def _generate_flash_sale_id() -> str:
 
 def _generate_order_id() -> str:
     return f"ORD_{uuid.uuid4().hex[:8].upper()}"
+
+def _inc_user_purchase_local(user_id: str, flash_sale_id: str, product_id: str, qty: int):
+    key = (user_id, flash_sale_id, product_id)
+    with _USER_PURCHASES_LOCK:
+        _USER_PURCHASES[key] = _USER_PURCHASES.get(key, 0) + qty
+        return _USER_PURCHASES[key]
+    
+def _get_user_purchase_local(user_id: str, flash_sale_id: str, product_id: str) -> int:
+    return _USER_PURCHASES.get((user_id, flash_sale_id, product_id), 0)
+
+# background-task stubs
+def _bg_log_order(order_id: str):
+    # cheap background logging / analytics
+    print(f"[BG] log order {order_id}")
+
+
+def _bg_notify_user(order_id: str, user_id: str):
+    # cheap background notification
+    print(f"[BG] notify user {user_id} for order {order_id}")
+
 
 
 # ---------- CREATE FLASH SALE ----------
@@ -49,9 +72,8 @@ def create_flash_sale(db: Session, data: FlashSaleCreate) -> FlashSale:
         visibility=data.visibility,
     )
     db.add(flash_sale)
-    db.flush()  # get flash_sale in session
+    db.flush() 
 
-    # For each product in the sale, we compute original_price & discount_percentage
     for item in data.products:
         product = (
             db.query(Product)
@@ -103,11 +125,24 @@ def create_flash_sale(db: Session, data: FlashSaleCreate) -> FlashSale:
 # ---------- GET / LIST FLASH SALES ----------
 
 def get_flash_sale(db: Session, flash_sale_id: str) -> Optional[FlashSale]:
-    return (
+    sale = (
         db.query(FlashSale)
         .filter(FlashSale.flash_sale_id == flash_sale_id)
         .first()
     )
+
+    if not sale:
+        return None
+
+    # increment visitors count safely
+    current = sale.visitors or 0
+    sale.visitors = current + 1
+
+    db.add(sale)
+    db.commit()
+    db.refresh(sale)
+
+    return sale
 
 
 def list_flash_sales(
@@ -171,19 +206,20 @@ def purchase_in_flash_sale(
     db: Session,
     flash_sale_id: str,
     request: FlashSalePurchaseRequest,
-    client_ip: str | None = None,
-):
+    client_ip: Optional[str] = None,
+    background_tasks: Optional[BackgroundTasks] = None,
+    require_max_per_user_check: bool = True,
+) -> FlashSaleOrder:
     """
-    Complete purchase handler (Module-3 + Module-4 combined)
-    Includes:
-    - flash sale active window check
-    - per-user limit enforcement
-    - concurrency-safe stock deduction (optimistic locking)
-    - cooling period, captcha, IP/device fairness validation
+    Fast purchase flow:
+    - perform validation via validate_purchase_request (existing)
+    - minimal SELECT to fetch stock, price, version, max_per_user
+    - single conditional UPDATE to decrement stock and bump version
+    - create order and commit
     """
-    
-    # 0️⃣ Run pre-purchase fairness validation first
-    validation = validate_purchase_request(
+
+    # validate (same as before)
+    validation: ValidatePurchaseResponse = validate_purchase_request(
         db=db,
         flash_sale_id=flash_sale_id,
         data=ValidatePurchaseRequest(
@@ -202,94 +238,112 @@ def purchase_in_flash_sale(
             detail={"message": "Purchase blocked", "reasons": validation.reasons},
         )
 
-    # 1️⃣ Load flash sale
-    flash_sale = (
-        db.query(FlashSale)
-        .filter(FlashSale.flash_sale_id == flash_sale_id)
-        .first()
-    )
-    if not flash_sale:
-        raise HTTPException(status_code=404, detail="Flash sale not found")
+    # quick sanity check
+    qty = int(request.quantity)
+    if qty <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
 
-    now = datetime.utcnow()
-
-    if flash_sale.status != "active":
-        raise HTTPException(status_code=400, detail="Flash sale is not active")
-
-    if not (flash_sale.start_time <= now <= flash_sale.end_time):
-        raise HTTPException(status_code=400, detail="Flash sale not in active time window")
-
-    # 2️⃣ Load product row with lock
-    fs_product = (
-        db.query(FlashSaleProduct)
-        .filter(
-            FlashSaleProduct.flash_sale_id == flash_sale.flash_sale_id,
-            FlashSaleProduct.product_id == request.product_id,
+    # ---- minimal SELECT ----
+    row = (
+        db.execute(
+            select(
+                FlashSaleProduct.id,
+                FlashSaleProduct.stock_remaining,
+                FlashSaleProduct.max_per_user,
+                FlashSaleProduct.flash_sale_price,
+                FlashSaleProduct.original_price,
+                FlashSaleProduct.version,
+            ).where(
+                and_(
+                    FlashSaleProduct.flash_sale_id == flash_sale_id,
+                    FlashSaleProduct.product_id == request.product_id,
+                )
+            ).limit(1)
         )
-        .with_for_update()  # prevents other threads buying simultaneously
         .first()
     )
 
-    if not fs_product:
+    if not row:
         raise HTTPException(status_code=404, detail="Product not part of flash sale")
 
-    # 3️⃣ Stock verification
-    if request.quantity > fs_product.stock_remaining:
-        raise HTTPException(status_code=400, detail="Insufficient flash sale stock")
+    fs_id = row.id
+    stock_remaining = int(row.stock_remaining or 0)
+    max_per_user = row.max_per_user
+    sale_price = float(row.flash_sale_price)
+    original_price = float(row.original_price or sale_price)
+    version = int(row.version or 0)
 
-    # 4️⃣ Optimistic locking safe update
-    old_version = fs_product.version
+    # process-local guard (cheap)
+    if require_max_per_user_check and max_per_user is not None:
+        local_prev = _get_user_purchase_local(request.user_id, flash_sale_id, request.product_id)
+        if local_prev + qty > int(max_per_user):
+            raise HTTPException(status_code=403, detail="Per-user limit exceeded (local guard)")
 
-    updated = (
-        db.query(FlashSaleProduct)
-        .filter(
-            FlashSaleProduct.id == fs_product.id,
-            FlashSaleProduct.version == old_version,
-            FlashSaleProduct.stock_remaining >= request.quantity,
+    # ---- conditional UPDATE (atomic) ----
+    upd = (
+        update(FlashSaleProduct)
+        .where(
+            and_(
+                FlashSaleProduct.id == fs_id,
+                FlashSaleProduct.stock_remaining >= qty,
+                # optional optimistic version safeguard:
+                # FlashSaleProduct.version == version,
+            )
         )
-        .update(
-            {
-                FlashSaleProduct.stock_remaining: FlashSaleProduct.stock_remaining - request.quantity,
-                FlashSaleProduct.version: FlashSaleProduct.version + 1,
-            },
-            synchronize_session=False,
+        .values(
+            stock_remaining=(FlashSaleProduct.stock_remaining - qty),
+            version=(FlashSaleProduct.version + 1),
         )
     )
 
-    if updated == 0:
-        raise HTTPException(
-            status_code=409,
-            detail="Purchase conflict — try again",
-        )
+    res = db.execute(upd)
+    if res.rowcount != 1:
+        # failed: insufficient stock or concurrent conflict
+        fresh = db.execute(select(FlashSaleProduct.stock_remaining).where(FlashSaleProduct.id == fs_id)).scalar_one_or_none()
+        fresh_stock = int(fresh or 0)
+        raise HTTPException(status_code=409, detail=f"Insufficient stock (remaining={fresh_stock})")
 
-    # 5️⃣ Order calculation
-    flash_sale_price = fs_product.flash_sale_price
-    total_price = flash_sale_price * request.quantity
-    savings = (fs_product.original_price * request.quantity) - total_price
-
-    order_id = generate_order_id()  # EX: ORD_202402_AB31
+    # ---- create order and commit ----
+    order_id = _generate_order_id()
+    total_price = sale_price * qty
+    savings = (original_price * qty) - total_price
 
     new_order = FlashSaleOrder(
         order_id=order_id,
-        flash_sale_id=flash_sale.flash_sale_id,
+        flash_sale_id=flash_sale_id,
         product_id=request.product_id,
         user_id=request.user_id,
-        quantity=request.quantity,
-        flash_sale_price=flash_sale_price,
+        quantity=qty,
+        flash_sale_price=sale_price,
         total_price=total_price,
         savings=savings,
         status="confirmed",
         payment_method=request.payment_method,
-
-        # 🔥 Module-4 fairness fields
         client_ip=client_ip,
         device_fingerprint=request.device_fingerprint,
+        purchase_timestamp=datetime.utcnow(),
     )
-
     db.add(new_order)
-    db.commit()
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # if commit fails, notify client to retry
+        raise HTTPException(status_code=500, detail="Failed to complete purchase; please try again") from e
+
+    # refresh to get DB-set fields
     db.refresh(new_order)
 
+    # update process-local cache
+    _inc_user_purchase_local(request.user_id, flash_sale_id, request.product_id, qty)
+
+    # schedule background tasks
+    if background_tasks:
+        background_tasks.add_task(_bg_log_order, new_order.order_id)
+        background_tasks.add_task(_bg_notify_user, new_order.order_id, new_order.user_id)
+
+    # return the ORM order object (route response_model expects it)
     return new_order
 
 
@@ -366,7 +420,6 @@ def get_remaining_limit(
 ) -> RemainingLimitResponse:
     summary = get_user_purchase_summary(db, flash_sale_id, user_id, product_id)
 
-    # Get fs_product again for max_per_user
     fs_product = (
         db.query(FlashSaleProduct)
         .filter(

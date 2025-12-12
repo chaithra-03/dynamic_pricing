@@ -1,12 +1,9 @@
 from datetime import date, datetime
 from typing import List, Optional
 from collections import defaultdict
-
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date
-
 from fastapi import HTTPException
-
 from app.models.flash_sale import FlashSale, FlashSaleOrder, FlashSaleProduct
 from app.models.product import Product
 from app.models.price_snapshot import PriceSnapshot
@@ -23,13 +20,16 @@ from app.schemas.analytics import (
 # ---------- FLASH SALE ANALYTICS ----------
 
 def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyticsResponse:
-    sale = (
+    sale: FlashSale = (
         db.query(FlashSale)
         .filter(FlashSale.flash_sale_id == flash_sale_id)
         .first()
     )
     if not sale:
         raise HTTPException(status_code=404, detail="Flash sale not found")
+
+    # read visitors; default to 0 if column missing or null
+    visitors = getattr(sale, "visitors", 0) or 0
 
     orders: List[FlashSaleOrder] = (
         db.query(FlashSaleOrder)
@@ -40,12 +40,19 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
         .all()
     )
 
+    # ---- no confirmed orders ----
     if not orders:
+        # if there are visitors but no buyers → 0% conversion
+        if visitors > 0:
+            conversion_rate = 0.0
+        else:
+            conversion_rate = 0.0  # no visitors → treat as 0%
+
         metrics = FlashSaleMetrics(
             total_revenue=0.0,
             units_sold=0,
             unique_buyers=0,
-            conversion_rate=None,
+            conversion_rate=conversion_rate,
             average_order_value=0.0,
             stock_sell_through_rate=0.0,
             peak_hour=None,
@@ -53,12 +60,12 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
         )
         return FlashSaleAnalyticsResponse(flash_sale_id=flash_sale_id, metrics=metrics)
 
+    # ---- we do have orders ----
     total_revenue = sum(o.total_price for o in orders)
     units_sold = sum(o.quantity for o in orders)
     unique_buyers = len({o.user_id for o in orders})
     average_order_value = total_revenue / len(orders)
 
-    # stock sell-through: total_sold / total_allocated
     fs_products: List[FlashSaleProduct] = (
         db.query(FlashSaleProduct)
         .filter(FlashSaleProduct.flash_sale_id == flash_sale_id)
@@ -67,7 +74,7 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
     total_allocated = sum(p.stock_allocated for p in fs_products) or 1
     stock_sell_through_rate = (units_sold / total_allocated) * 100.0
 
-    # peak hour (simple)
+    # peak hour
     hour_buckets = defaultdict(int)
     for o in orders:
         h = o.purchase_timestamp.replace(minute=0, second=0, microsecond=0)
@@ -79,14 +86,19 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
     else:
         peak_hour_str = None
 
-    # geographic_distribution placeholder: we don't have country field, so leave empty
+    # conversion rate: unique buyers / visitors
+    if visitors > 0:
+        conversion_rate = (unique_buyers / visitors) * 100.0
+    else:
+        conversion_rate = 0.0
+
     geo_distribution = {}
 
     metrics = FlashSaleMetrics(
         total_revenue=total_revenue,
         units_sold=units_sold,
         unique_buyers=unique_buyers,
-        conversion_rate=None,  # requires page views / traffic data
+        conversion_rate=conversion_rate,
         average_order_value=average_order_value,
         stock_sell_through_rate=stock_sell_through_rate,
         peak_hour=peak_hour_str,
@@ -97,8 +109,6 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
         flash_sale_id=flash_sale_id,
         metrics=metrics,
     )
-
-
 # ---------- PRICE ELASTICITY ----------
 
 def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityResponse:
@@ -156,9 +166,9 @@ def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityRespons
             p_avg = (p1 + p2) / 2
             elasticity = (dq / q_avg) / (dp / p_avg)
         else:
-            elasticity = None
+            elasticity = 0.0
     else:
-        elasticity = None
+        elasticity = 0.0
 
     # naive "optimal price": somewhere between base and avg
     optimal_price_point = (base_price + average_sale_price) / 2.0

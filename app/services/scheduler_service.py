@@ -1,9 +1,7 @@
 import asyncio
 from datetime import datetime
 from typing import List
-
 from sqlalchemy.orm import Session
-
 from app.database.connection import SessionLocal  # or your session maker
 from app.models.flash_sale import FlashSale, FlashSaleProduct, FlashSaleOrder
 from app.models.product import Product
@@ -50,7 +48,6 @@ async def flash_sale_scheduler():
         for sale in scheduled_sales:
             if sale.start_time <= current_time <= sale.end_time:
                 activate_flash_sale(db, sale.flash_sale_id)
-                # TODO: send_notifications(sale)
 
         # End active sales
         active_sales: List[FlashSale] = (
@@ -61,7 +58,6 @@ async def flash_sale_scheduler():
         for sale in active_sales:
             if sale.end_time <= current_time:
                 end_flash_sale(db, sale.flash_sale_id)
-                # TODO: generate_report(sale)
 
     finally:
         db.close()
@@ -90,7 +86,7 @@ async def capture_price_snapshots():
         products: List[Product] = db.query(Product).all()
 
         for product in products:
-            # active rules affecting this product (simple example)
+            # active rules affecting this product 
             active_rules = (
                 db.query(PricingRule)
                 .filter(PricingRule.status == "active")

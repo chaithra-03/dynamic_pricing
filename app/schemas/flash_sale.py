@@ -48,6 +48,7 @@ class FlashSaleResponse(FlashSaleBase):
     created_at: datetime
     updated_at: datetime
     products: List[FlashSaleProductItemResponse] = []
+    visitors: int
 
     class Config:
         orm_mode = True

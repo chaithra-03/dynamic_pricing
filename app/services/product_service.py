@@ -2,7 +2,8 @@ from sqlalchemy.orm import Session
 from app.models.product import Product
 from app.models.price_history import PriceHistory
 from app.schemas.product import ProductCreate, ProductUpdate, BulkPriceUpdateRequest
-
+from typing import List, Tuple
+from sqlalchemy import func
 
 def record_price_change(
     db: Session,
@@ -123,10 +124,40 @@ def update_base_price(
 # --------------------------
 # GET PRICE HISTORY
 # --------------------------
-def get_price_history(db: Session, product_id: str):
-    return db.query(PriceHistory).filter(
-        PriceHistory.product_id == product_id
-    ).all()
+def get_price_history(
+    db: Session,
+    product_id: str,
+    page: int = 1,
+    page_size: int = 50,
+) -> Tuple[List[PriceHistory], int]:
+    """
+    Returns (items, total_count)
+    page is 1-based.
+    """
+    # Protect bounds
+    if page < 1:
+        page = 1
+    MAX_PAGE_SIZE = 200
+    if page_size < 1:
+        page_size = 1
+    if page_size > MAX_PAGE_SIZE:
+        page_size = MAX_PAGE_SIZE
+
+    query = db.query(PriceHistory).filter(PriceHistory.product_id == product_id)
+
+    # total count (fast when indexed)
+    total = query.with_entities(func.count()).scalar() or 0
+
+    offset = (page - 1) * page_size
+    items = (
+        query
+        .order_by(PriceHistory.changed_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    return items, total
 
 # --------------------------
 # BULK PRICE UPDATE

@@ -1,6 +1,5 @@
 from typing import List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request,BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
@@ -105,7 +104,6 @@ def cancel_flash_sale_route(
 
 
 # ---------- PURCHASE DURING FLASH SALE ----------
-
 @router.post(
     "/{flash_sale_id}/purchase",
     response_model=FlashSalePurchaseResponse,
@@ -115,10 +113,17 @@ def purchase_flash_sale_route(
     flash_sale_id: str,
     request_body: FlashSalePurchaseRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     client_ip = request.client.host if request.client else None
-    order = purchase_in_flash_sale(db, flash_sale_id, request_body, client_ip=client_ip)
+    order = purchase_in_flash_sale(
+        db=db,
+        flash_sale_id=flash_sale_id,
+        request=request_body,
+        client_ip=client_ip,
+        background_tasks=background_tasks,
+    )
     return order
 
 

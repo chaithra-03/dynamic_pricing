@@ -1,7 +1,7 @@
 import sys
 import os
 from logging.config import fileConfig
-
+from app.core.config import settings
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
@@ -21,6 +21,7 @@ if config.config_file_name is not None:
 # Set target metadata for 'autogenerate'
 target_metadata = Base.metadata
 
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 
 def run_migrations_offline() -> None:

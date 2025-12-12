@@ -1,6 +1,4 @@
-# app/core/config.py
 from pydantic_settings import BaseSettings
-
 
 class Settings(BaseSettings):
     # DB
@@ -14,7 +12,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        # ignore extra env vars instead of crashing
         extra = "ignore"
 
 

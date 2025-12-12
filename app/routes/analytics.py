@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-
 from app.database.connection import get_db
 from app.schemas.analytics import (
     FlashSaleAnalyticsResponse,

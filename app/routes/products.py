@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.schemas.product import BulkPriceUpdateRequest, ProductCreate, ProductUpdate, ProductResponse
-from app.schemas.price_history import PriceHistoryResponse
+from app.schemas.price_history import PriceHistoryPageResponse, PriceHistoryResponse
 from app.services.product_service import (
     create_product, get_product, list_products,
     update_product, delete_product, update_base_price,
@@ -10,7 +10,7 @@ from app.services.product_service import (
 )
 from app.dependencies.auth import require_auth, require_admin
 from app.models.user import User
-
+from typing import List
 
 router = APIRouter(prefix="/products", tags=["Product & Base Pricing Management"])
 
@@ -63,9 +63,25 @@ def update_price(
 
 
 # PRICE HISTORY
-@router.get("/{product_id}/price-history", response_model=list[PriceHistoryResponse], dependencies=[Depends(require_admin)])
-def view_history(product_id: str, db: Session = Depends(get_db)):
-    return get_price_history(db, product_id)
+@router.get("/{product_id}/price-history", response_model=PriceHistoryPageResponse, dependencies=[Depends(require_admin)])
+def view_history(
+    product_id: str,
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    items, total = get_price_history(db, product_id, page=page, page_size=page_size)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    return {
+        "items": items,
+        "meta": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        },
+    }
 
 # BULK UPDATE
 @router.post("/bulk-price-update", dependencies=[Depends(require_admin)])

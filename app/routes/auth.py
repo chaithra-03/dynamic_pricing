@@ -1,10 +1,7 @@
-# app/routes/auth.py
 from datetime import timedelta
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-
 from app.database.connection import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, Token
@@ -30,7 +27,7 @@ def register_user(data: UserCreate, db: Session = Depends(get_db)):
         username=data.username,
         email=data.email,
         hashed_password=get_password_hash(data.password),
-        role=data.role,  # "user" or "admin"
+        role=data.role,  
     )
 
     db.add(user)

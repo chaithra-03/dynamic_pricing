@@ -1,4 +1,5 @@
 from typing import Optional
+from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -41,12 +42,22 @@ def calculate_price(
 
     user_tier_value: Optional[str] = user_tier.value if user_tier else None
 
+    # ---- measure calculation time ----
+    start = perf_counter()
     result = calculate_final_price(
         db=db,
         product=product,
         quantity=quantity,
         user_tier=user_tier_value,
     )
+    duration_ms = (perf_counter() - start) * 1000.0
+
+    # optional logging if slower than target
+    if duration_ms > 30.0:
+        print(
+            f"[WARN] Price calculation for product {product_id} took "
+            f"{duration_ms:.2f} ms (quantity={quantity})"
+        )
 
     flash_qty = result["flash_sale_quantity"]
     dyn_qty = result["dynamic_quantity"]
@@ -137,4 +148,6 @@ def calculate_price(
         "applied_discount_rules": [rule.rule_id for rule in result["applied_rules"]],
         "pricing_breakdown": pricing_breakdown,
         "summary": summary,
+
+        "calculated_in_ms": duration_ms,
     }

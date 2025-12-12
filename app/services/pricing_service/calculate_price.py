@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Optional, List, Tuple, Dict, Any
 
 from sqlalchemy.orm import Session
@@ -6,6 +6,44 @@ from sqlalchemy.orm import Session
 from app.models.product import Product
 from app.models.pricing_rule import PricingRule
 from app.models.flash_sale import FlashSale, FlashSaleProduct
+
+
+# ===================== SIMPLE IN-MEMORY CACHES =====================
+
+# product_id -> (rules, expires_at)
+_RULE_CACHE: Dict[str, Tuple[List[PricingRule], datetime]] = {}
+
+# product_id -> (flash_sale_row, expires_at)
+_FLASH_SALE_CACHE: Dict[str, Tuple[Any, datetime]] = {}
+
+CACHE_TTL_SECONDS = 60  # 1 minute cache TTL
+
+
+def _get_cached(
+    cache: Dict[str, Tuple[Any, datetime]],
+    key: str,
+) -> Optional[Any]:
+    """Return cached value if not expired, else None."""
+    now = datetime.utcnow()
+    entry = cache.get(key)
+    if not entry:
+        return None
+    value, expires_at = entry
+    if now >= expires_at:
+        # expired
+        cache.pop(key, None)
+        return None
+    return value
+
+
+def _set_cached(
+    cache: Dict[str, Tuple[Any, datetime]],
+    key: str,
+    value: Any,
+) -> None:
+    """Set cache with TTL."""
+    expires_at = datetime.utcnow() + timedelta(seconds=CACHE_TTL_SECONDS)
+    cache[key] = (value, expires_at)
 
 
 # ===================== PUBLIC ENTRY =====================
@@ -53,7 +91,7 @@ def calculate_final_price(
         if flash_row.max_per_user is not None:
             available_by_user = int(flash_row.max_per_user)
         else:
-            available_by_user = quantity  # no per-user cap
+            available_by_user = quantity
 
         max_flash_units = min(quantity, available_by_stock, available_by_user)
 
@@ -88,14 +126,11 @@ def calculate_final_price(
         dynamic_unit_price = float(dyn_unit_price)
         dynamic_total_price = dynamic_unit_price * dyn_qty
     else:
-        # No dynamic portion, still return a sensible number for unit price
         dynamic_unit_price = base_price
         dynamic_total_price = 0.0
 
     # ---- 3) Total combination ----
     total_final_price = flash_total_price + dynamic_total_price
-
-    # Effective averaged unit price over the whole quantity
     unit_final_price = total_final_price / quantity if quantity > 0 else 0.0
 
     return {
@@ -130,7 +165,13 @@ def _get_active_flash_sale_for_product(db: Session, product: Product):
     NOTE:
     - This does NOT enforce stock or user-limit; we do that in calculate_final_price().
     - We only care about active sales within time window.
+    - Uses a small in-memory cache keyed by product_id.
     """
+    cache_key = product.product_id
+    cached = _get_cached(_FLASH_SALE_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     now = datetime.utcnow()
 
     row = (
@@ -155,6 +196,7 @@ def _get_active_flash_sale_for_product(db: Session, product: Product):
         .first()
     )
 
+    _set_cached(_FLASH_SALE_CACHE, cache_key, row)
     return row
 
 
@@ -166,7 +208,14 @@ def _get_applicable_rules(db: Session, product: Product) -> List[PricingRule]:
     Return all active pricing rules that apply to this product via:
     - product_ids OR
     - product_categories
+
+    Uses a small in-memory cache keyed by product_id.
     """
+    cache_key = product.product_id
+    cached = _get_cached(_RULE_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     rules = db.query(PricingRule).filter(PricingRule.status == "active").all()
     applicable: List[PricingRule] = []
 
@@ -183,6 +232,7 @@ def _get_applicable_rules(db: Session, product: Product) -> List[PricingRule]:
 
         applicable.append(rule)
 
+    _set_cached(_RULE_CACHE, cache_key, applicable)
     return applicable
 
 
@@ -204,7 +254,6 @@ def _calculate_dynamic_price(
     cart_value = float(product.base_price) * quantity
     active_rules = _get_applicable_rules(db, product)
 
-    # Sort by priority, default 10 if missing
     sorted_rules = sorted(active_rules, key=lambda r: getattr(r, "priority", 10))
 
     price = float(product.base_price)
@@ -225,7 +274,6 @@ def _calculate_dynamic_price(
             if getattr(rule, "is_exclusive", False):
                 break
 
-    # Apply minimum allowed price floor
     price = max(price, float(product.min_allowed_price))
     return price, applied_rules
 
@@ -260,7 +308,7 @@ def _calculate_discount(
 
         # Day-of-week check
         if days_of_week:
-            weekday_name = now.strftime("%A")  # "Monday", "Tuesday", ...
+            weekday_name = now.strftime("%A")
             if weekday_name not in days_of_week:
                 return 0.0
 
@@ -274,7 +322,6 @@ def _calculate_discount(
             if not (start_t <= now.time() <= end_t):
                 return 0.0
         except Exception:
-            # If schedule time parsing fails, ignore intra-day limits
             pass
 
         if rule.discount_type == "percentage":
@@ -299,7 +346,6 @@ def _calculate_discount(
 
     # ---- 3) User-Tier-Based Pricing ----
     if rule.type == "user_tier":
-        # rule.user_tiers like ["gold", "platinum"]
         if user_tier and user_tier in (rule.user_tiers or []):
             return float(rule.discount_value or 0.0)
         return 0.0

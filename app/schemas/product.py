@@ -30,6 +30,5 @@ class BulkPriceUpdateItem(BaseModel):
     product_id: str
     new_price: float
 
-
 class BulkPriceUpdateRequest(BaseModel):
     data: list[BulkPriceUpdateItem]

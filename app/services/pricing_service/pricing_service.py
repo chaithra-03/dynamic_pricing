@@ -13,19 +13,14 @@ def get_pricing_rules(db: Session, skip: int = 0, limit: int = 100):
     return db.query(PricingRule).offset(skip).limit(limit).all()
 
 def get_pricing_rule(db: Session, rule_id: str):
-    # 🔑 look up by string rule_id (RULE_001), not numeric id
     return db.query(PricingRule).filter(PricingRule.rule_id == rule_id).first()
 
 def update_pricing_rule(db: Session, rule_id: str, rule_update: PricingRuleUpdate):
-    # 🔑 again, filter by rule_id column
     db_rule = db.query(PricingRule).filter(PricingRule.rule_id == rule_id).first()
     if not db_rule:
         return None
 
     for key, value in rule_update.dict(exclude_unset=True).items():
-        # optional: prevent changing rule_id from body
-        # if key == "rule_id":
-        #     continue
         setattr(db_rule, key, value)
 
     db.commit()
