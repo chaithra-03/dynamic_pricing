@@ -5,20 +5,16 @@ from app.core.config import settings
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-# Make sure "app" package is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.database.connection import Base  # 👈 your Base
-from app.models import product, pricing_rule, flash_sale  # 👈 import ALL models so Alembic sees them
+from app.database.connection import Base  
+from app.models import product, pricing_rule, flash_sale  
 
-# this is the Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set target metadata for 'autogenerate'
 target_metadata = Base.metadata
 
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

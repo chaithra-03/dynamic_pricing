@@ -23,7 +23,6 @@ def upgrade():
         "flash_sales",
         sa.Column("visitors", sa.Integer(), nullable=False, server_default="0"),
     )
-    # No ALTER COLUMN here; SQLite doesn't support it
 
 
 def downgrade():

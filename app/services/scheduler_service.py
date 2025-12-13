@@ -10,8 +10,6 @@ from app.models.pricing_rule import PricingRule
 from app.services.flash_sale import activate_flash_sale, end_flash_sale
 
 
-# ---------- Utility: get a DB session in background ----------
-
 def get_db_session() -> Session:
     return SessionLocal()
 
@@ -74,7 +72,7 @@ async def price_snapshot_scheduler_loop():
             await capture_price_snapshots()
         except Exception as e:
             print(f"[price_snapshot_scheduler_loop] Error: {e}")
-        await asyncio.sleep(60 * 60)  # 1 hour
+        await asyncio.sleep(60 * 60)  
 
 
 async def capture_price_snapshots():
@@ -86,14 +84,12 @@ async def capture_price_snapshots():
         products: List[Product] = db.query(Product).all()
 
         for product in products:
-            # active rules affecting this product 
             active_rules = (
                 db.query(PricingRule)
                 .filter(PricingRule.status == "active")
                 .all()
             )
 
-            # Filter rules by product or category
             active_rule_ids = []
             for rule in active_rules:
                 if rule.product_ids and product.product_id not in rule.product_ids:

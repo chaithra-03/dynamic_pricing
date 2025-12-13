@@ -45,14 +45,11 @@ def _inc_user_purchase_local(user_id: str, flash_sale_id: str, product_id: str, 
 def _get_user_purchase_local(user_id: str, flash_sale_id: str, product_id: str) -> int:
     return _USER_PURCHASES.get((user_id, flash_sale_id, product_id), 0)
 
-# background-task stubs
 def _bg_log_order(order_id: str):
-    # cheap background logging / analytics
     print(f"[BG] log order {order_id}")
 
 
 def _bg_notify_user(order_id: str, user_id: str):
-    # cheap background notification
     print(f"[BG] notify user {user_id} for order {order_id}")
 
 
@@ -134,7 +131,6 @@ def get_flash_sale(db: Session, flash_sale_id: str) -> Optional[FlashSale]:
     if not sale:
         return None
 
-    # increment visitors count safely
     current = sale.visitors or 0
     sale.visitors = current + 1
 
@@ -210,15 +206,7 @@ def purchase_in_flash_sale(
     background_tasks: Optional[BackgroundTasks] = None,
     require_max_per_user_check: bool = True,
 ) -> FlashSaleOrder:
-    """
-    Fast purchase flow:
-    - perform validation via validate_purchase_request (existing)
-    - minimal SELECT to fetch stock, price, version, max_per_user
-    - single conditional UPDATE to decrement stock and bump version
-    - create order and commit
-    """
-
-    # validate (same as before)
+ 
     validation: ValidatePurchaseResponse = validate_purchase_request(
         db=db,
         flash_sale_id=flash_sale_id,
@@ -238,12 +226,10 @@ def purchase_in_flash_sale(
             detail={"message": "Purchase blocked", "reasons": validation.reasons},
         )
 
-    # quick sanity check
     qty = int(request.quantity)
     if qty <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be positive")
 
-    # ---- minimal SELECT ----
     row = (
         db.execute(
             select(
@@ -273,21 +259,17 @@ def purchase_in_flash_sale(
     original_price = float(row.original_price or sale_price)
     version = int(row.version or 0)
 
-    # process-local guard (cheap)
     if require_max_per_user_check and max_per_user is not None:
         local_prev = _get_user_purchase_local(request.user_id, flash_sale_id, request.product_id)
         if local_prev + qty > int(max_per_user):
             raise HTTPException(status_code=403, detail="Per-user limit exceeded (local guard)")
 
-    # ---- conditional UPDATE (atomic) ----
     upd = (
         update(FlashSaleProduct)
         .where(
             and_(
                 FlashSaleProduct.id == fs_id,
                 FlashSaleProduct.stock_remaining >= qty,
-                # optional optimistic version safeguard:
-                # FlashSaleProduct.version == version,
             )
         )
         .values(
@@ -298,12 +280,10 @@ def purchase_in_flash_sale(
 
     res = db.execute(upd)
     if res.rowcount != 1:
-        # failed: insufficient stock or concurrent conflict
         fresh = db.execute(select(FlashSaleProduct.stock_remaining).where(FlashSaleProduct.id == fs_id)).scalar_one_or_none()
         fresh_stock = int(fresh or 0)
         raise HTTPException(status_code=409, detail=f"Insufficient stock (remaining={fresh_stock})")
 
-    # ---- create order and commit ----
     order_id = _generate_order_id()
     total_price = sale_price * qty
     savings = (original_price * qty) - total_price
@@ -329,21 +309,16 @@ def purchase_in_flash_sale(
         db.commit()
     except Exception as e:
         db.rollback()
-        # if commit fails, notify client to retry
         raise HTTPException(status_code=500, detail="Failed to complete purchase; please try again") from e
 
-    # refresh to get DB-set fields
     db.refresh(new_order)
 
-    # update process-local cache
     _inc_user_purchase_local(request.user_id, flash_sale_id, request.product_id, qty)
 
-    # schedule background tasks
     if background_tasks:
         background_tasks.add_task(_bg_log_order, new_order.order_id)
         background_tasks.add_task(_bg_notify_user, new_order.order_id, new_order.user_id)
 
-    # return the ORM order object (route response_model expects it)
     return new_order
 
 
@@ -353,7 +328,6 @@ def get_user_purchase_summary(
     user_id: str,
     product_id: str,
 ) -> PurchaseTrackingResponse:
-    # Ensure sale exists
     sale = (
         db.query(FlashSale)
         .filter(FlashSale.flash_sale_id == flash_sale_id)
@@ -362,7 +336,6 @@ def get_user_purchase_summary(
     if not sale:
         raise HTTPException(status_code=404, detail="Flash sale not found")
 
-    # Get orders
     orders = (
         db.query(FlashSaleOrder)
         .filter(
@@ -386,7 +359,6 @@ def get_user_purchase_summary(
 
     total_purchased = sum(o.quantity for o in orders)
 
-    # Get max_per_user from FlashSaleProduct
     fs_product = (
         db.query(FlashSaleProduct)
         .filter(
@@ -440,10 +412,6 @@ def get_remaining_limit(
     )
 
 def verify_captcha(token: Optional[str]) -> bool:
-    """
-    Placeholder for real captcha verification.
-    For now: consider any non-empty token as valid.
-    """
     if not token:
         return False
     return True
@@ -517,7 +485,7 @@ def validate_purchase_request(
     if not verify_captcha(data.captcha_token):
         reasons.append("Captcha validation failed")
 
-    # 6. IP-based tracking (simple check / placeholder)
+    # 6. IP-based tracking 
     if client_ip:
         other_users_same_ip = (
             db.query(FlashSaleOrder)
@@ -530,7 +498,6 @@ def validate_purchase_request(
             )
             .count()
         )
-        # simple heuristic: if many different users from same IP, mark suspicious
         if other_users_same_ip >= 5:
             reasons.append(
                 "Too many purchases from the same IP address. Possible abuse detected."
@@ -538,7 +505,6 @@ def validate_purchase_request(
 
     allowed = len(reasons) == 0
 
-    # If sale is not active or time invalid, we already added reasons
     return ValidatePurchaseResponse(
         allowed=allowed,
         reasons=reasons,

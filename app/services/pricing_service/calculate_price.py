@@ -1,14 +1,12 @@
 from datetime import datetime, time, timedelta
 from typing import Optional, List, Tuple, Dict, Any
-
 from sqlalchemy.orm import Session
-
 from app.models.product import Product
 from app.models.pricing_rule import PricingRule
 from app.models.flash_sale import FlashSale, FlashSaleProduct
 
 
-# ===================== SIMPLE IN-MEMORY CACHES =====================
+# ===================== IN-MEMORY CACHES =====================
 
 # product_id -> (rules, expires_at)
 _RULE_CACHE: Dict[str, Tuple[List[PricingRule], datetime]] = {}
@@ -46,8 +44,6 @@ def _set_cached(
     cache[key] = (value, expires_at)
 
 
-# ===================== PUBLIC ENTRY =====================
-
 
 def calculate_final_price(
     db: Session,
@@ -56,13 +52,13 @@ def calculate_final_price(
     user_tier: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Calculate final price with combined flash sale + dynamic pricing logic.
+    Calculate final price `
 
     Business rules:
     - Flash sale has highest priority.
     - Flash sale can apply partially if quantity > available stock or max_per_user.
-    - Remaining quantity (if any) uses dynamic pricing rules.
-    - Dynamic prices respect min_allowed_price, flash sale does NOT (by design choice).
+    - Remaining quantity uses dynamic pricing rules.
+    - Dynamic prices respect min_allowed_price.
     """
 
     base_price = float(product.base_price)
@@ -161,12 +157,8 @@ def calculate_final_price(
 def _get_active_flash_sale_for_product(db: Session, product: Product):
     """
     Return an active flash sale row for this product, or None.
-
-    NOTE:
-    - This does NOT enforce stock or user-limit; we do that in calculate_final_price().
-    - We only care about active sales within time window.
-    - Uses a small in-memory cache keyed by product_id.
     """
+
     cache_key = product.product_id
     cached = _get_cached(_FLASH_SALE_CACHE, cache_key)
     if cached is not None:
@@ -204,13 +196,7 @@ def _get_active_flash_sale_for_product(db: Session, product: Product):
 
 
 def _get_applicable_rules(db: Session, product: Product) -> List[PricingRule]:
-    """
-    Return all active pricing rules that apply to this product via:
-    - product_ids OR
-    - product_categories
-
-    Uses a small in-memory cache keyed by product_id.
-    """
+    
     cache_key = product.product_id
     cached = _get_cached(_RULE_CACHE, cache_key)
     if cached is not None:
@@ -220,12 +206,10 @@ def _get_applicable_rules(db: Session, product: Product) -> List[PricingRule]:
     applicable: List[PricingRule] = []
 
     for rule in rules:
-        # If product_ids specified, product_id must be included
         if rule.product_ids:
             if product.product_id not in rule.product_ids:
                 continue
 
-        # If product_categories specified, category must match
         if rule.product_categories:
             if product.category not in rule.product_categories:
                 continue
@@ -243,14 +227,9 @@ def _calculate_dynamic_price(
     user_tier: Optional[str] = None,
 ) -> Tuple[float, List[PricingRule]]:
     """
-    Apply dynamic pricing rules (NO flash sale) for the given quantity.
-
-    Priority inside rules is handled by numeric 'priority' field:
-    - lower priority value = higher precedence
-    - exclusive rule stops further rule application
-
-    Final price is clamped by min_allowed_price.
+    Apply dynamic pricing rules for the given quantity.
     """
+
     cart_value = float(product.base_price) * quantity
     active_rules = _get_applicable_rules(db, product)
 
@@ -353,7 +332,6 @@ def _calculate_discount(
     # ---- 4) Cart Threshold ----
     if rule.type == "cart_threshold":
         if cart_value >= (rule.min_cart_value or 0.0):
-            # treating discount_value as percentage
             return float(rule.discount_value or 0.0)
         return 0.0
 

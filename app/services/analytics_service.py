@@ -28,7 +28,6 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
     if not sale:
         raise HTTPException(status_code=404, detail="Flash sale not found")
 
-    # read visitors; default to 0 if column missing or null
     visitors = getattr(sale, "visitors", 0) or 0
 
     orders: List[FlashSaleOrder] = (
@@ -40,13 +39,11 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
         .all()
     )
 
-    # ---- no confirmed orders ----
     if not orders:
-        # if there are visitors but no buyers → 0% conversion
         if visitors > 0:
             conversion_rate = 0.0
         else:
-            conversion_rate = 0.0  # no visitors → treat as 0%
+            conversion_rate = 0.0  
 
         metrics = FlashSaleMetrics(
             total_revenue=0.0,
@@ -60,7 +57,6 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
         )
         return FlashSaleAnalyticsResponse(flash_sale_id=flash_sale_id, metrics=metrics)
 
-    # ---- we do have orders ----
     total_revenue = sum(o.total_price for o in orders)
     units_sold = sum(o.quantity for o in orders)
     unique_buyers = len({o.user_id for o in orders})
@@ -74,7 +70,6 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
     total_allocated = sum(p.stock_allocated for p in fs_products) or 1
     stock_sell_through_rate = (units_sold / total_allocated) * 100.0
 
-    # peak hour
     hour_buckets = defaultdict(int)
     for o in orders:
         h = o.purchase_timestamp.replace(minute=0, second=0, microsecond=0)
@@ -86,7 +81,6 @@ def get_flash_sale_analytics(db: Session, flash_sale_id: str) -> FlashSaleAnalyt
     else:
         peak_hour_str = None
 
-    # conversion rate: unique buyers / visitors
     if visitors > 0:
         conversion_rate = (unique_buyers / visitors) * 100.0
     else:
@@ -120,7 +114,6 @@ def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityRespons
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Use flash sale orders as sale data for this product
     orders: List[FlashSaleOrder] = (
         db.query(FlashSaleOrder)
         .filter(
@@ -151,14 +144,12 @@ def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityRespons
         o.quantity for o in orders if o.flash_sale_price < base_price - 1e-6
     )
 
-    # Very simple "elasticity" approximation based on two buckets
     if sales_at_discount > 0 and sales_at_full_price > 0:
         q1 = sales_at_full_price
         q2 = sales_at_discount
         p1 = base_price
         p2 = average_sale_price
 
-        # avoid division by zero
         if p1 != p2 and q1 != q2:
             dq = q2 - q1
             dp = p2 - p1
@@ -170,7 +161,6 @@ def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityRespons
     else:
         elasticity = 0.0
 
-    # naive "optimal price": somewhere between base and avg
     optimal_price_point = (base_price + average_sale_price) / 2.0
 
     analysis = PriceElasticityAnalysis(
@@ -188,7 +178,6 @@ def get_price_elasticity(db: Session, product_id: str) -> PriceElasticityRespons
 # ---------- REVENUE BY DAY ----------
 
 def get_revenue_by_day(db: Session) -> RevenueByDayResponse:
-    # Use SQLite's DATE() function to group by calendar day
     rows = (
         db.query(
             func.date(FlashSaleOrder.purchase_timestamp).label("day_str"),
@@ -206,11 +195,9 @@ def get_revenue_by_day(db: Session) -> RevenueByDayResponse:
         day_str = row.day_str
         revenue = row.revenue or 0
 
-        # day_str is usually "YYYY-MM-DD" from SQLite
         if isinstance(day_str, str):
             d = date.fromisoformat(day_str)
         else:
-            # Fallback: if already a date/datetime
             d = day_str.date() if hasattr(day_str, "date") else day_str
 
         items.append(

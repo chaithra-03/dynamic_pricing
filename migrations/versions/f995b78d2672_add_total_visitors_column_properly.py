@@ -10,7 +10,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade():
-    pass           # We do NOT drop the default; having default 0 is completely fine.
+    pass          
 
 
 def downgrade():

@@ -92,10 +92,8 @@ def update_base_price(
     if not product:
         return None
 
-    # Ensure base price does NOT go below min_allowed_price
     final_base_price = max(new_base_price, product.min_allowed_price)
 
-    # If adjustment happens, record change based on actual updated price
     record_price_change(
         db, product_id,
         price_type="base_price",
@@ -104,7 +102,6 @@ def update_base_price(
     )
     product.base_price = final_base_price
 
-    # Optional current price sync
     if sync_current_price:
         final_current_price = max(final_base_price, product.min_allowed_price)
 
@@ -134,7 +131,6 @@ def get_price_history(
     Returns (items, total_count)
     page is 1-based.
     """
-    # Protect bounds
     if page < 1:
         page = 1
     MAX_PAGE_SIZE = 200
@@ -145,7 +141,6 @@ def get_price_history(
 
     query = db.query(PriceHistory).filter(PriceHistory.product_id == product_id)
 
-    # total count (fast when indexed)
     total = query.with_entities(func.count()).scalar() or 0
 
     offset = (page - 1) * page_size
@@ -177,10 +172,8 @@ def bulk_update_prices(db: Session, request: BulkPriceUpdateRequest):
 
         old_price = product.current_price
 
-        # Ensure new price is NOT below min_allowed_price
         applied_price = max(item.new_price, product.min_allowed_price)
 
-        # Save update + price history
         if applied_price != old_price:
             record_price_change(
                 db,

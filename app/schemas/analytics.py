@@ -9,7 +9,7 @@ class FlashSaleMetrics(BaseModel):
     total_revenue: float
     units_sold: int
     unique_buyers: int
-    conversion_rate: Optional[float] = None  # placeholder if you later add view data
+    conversion_rate: Optional[float] = None 
     average_order_value: float
     stock_sell_through_rate: float
     peak_hour: Optional[str] = None
