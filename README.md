@@ -117,6 +117,7 @@ Install all required dependencies using:
 
 `pip install -r requirements.txt`
 
+---
 
 ## 5. How to Run the Application
 ### Clone the Repository
@@ -154,6 +155,8 @@ Swagger UI: http://127.0.0.1:8000/docs
 
 OpenAPI Spec: http://127.0.0.1:8000/openapi.json
 
+---
+
 ## 6. Running Tests
 
 The project uses pytest with an in-memory SQLite database for isolation and speed.
@@ -171,6 +174,8 @@ The project uses pytest with an in-memory SQLite database for isolation and spee
 - Flash sale creation and activation
 
 - Flash sale purchase flow and per-user limits
+
+---
 
 ## 7. Assumptions
 
